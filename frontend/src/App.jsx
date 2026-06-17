@@ -252,6 +252,13 @@ function detectAiGenerated(metadata, pixels) {
   const metrics = visualMetrics(pixels);
   const isNonSquareJpeg = metadata.format === "JPEG" && metadata.width !== metadata.height;
   const isCommonCameraShape = isNonSquareJpeg && Math.max(metadata.width, metadata.height) >= 1000;
+  const bytesPerPixel = metadata.file_size_bytes / Math.max(1, metadata.width * metadata.height);
+  const hasCompressedLowTextureJpeg =
+    metadata.format === "JPEG" &&
+    !metadata.has_exif &&
+    bytesPerPixel < 0.16 &&
+    metrics.entropy < 3.35 &&
+    metrics.channelMeanSpread < 14;
 
   let score = 24;
   score += metadata.has_exif ? -8 : 6;
@@ -262,15 +269,17 @@ function detectAiGenerated(metadata, pixels) {
   else if (metrics.edgeDensity > 0.09) score -= 8;
   if (metrics.entropy < 3.2) score += 6;
   else if (metrics.entropy > 4.4) score -= 6;
+  if (hasCompressedLowTextureJpeg) score += 36;
   if (metadata.format === "WEBP") score += 3;
-  if (isCommonCameraShape) score -= 12;
+  if (isCommonCameraShape && !hasCompressedLowTextureJpeg) score -= 12;
 
   const weakEvidenceOnly =
     isNonSquareJpeg &&
     !metadata.has_exif &&
     metadata.width >= 800 &&
     metadata.height >= 800 &&
-    metrics.entropy >= 3.3;
+    metrics.entropy >= 3.3 &&
+    bytesPerPixel >= 0.16;
   if (weakEvidenceOnly) {
     score = Math.min(score, 54);
   }
