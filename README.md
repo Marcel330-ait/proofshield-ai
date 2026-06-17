@@ -6,6 +6,20 @@ Local-first AI-generated image risk signal app.
 
 作者 / Author: [Marcel330-ait](https://github.com/Marcel330-ait)
 
+## 在线使用 / Use Online
+
+打开 GitHub Pages 链接即可使用，不需要安装后端：
+
+Open the GitHub Pages link to use the app directly. No backend setup is required:
+
+```text
+https://marcel330-ait.github.io/proofshield-ai/
+```
+
+公开网页版本会直接在浏览器中分析图片，不会上传图片到服务器。
+
+The public web version analyzes images directly in the browser and does not upload images to a server.
+
 ## 项目简介 / Overview
 
 ProofShield AI 是一个 MVP Web 应用，用于分析上传图片是否疑似由 AI 生成，并提示潜在欺诈或误导信息风险。
@@ -34,7 +48,8 @@ MVP 采用本地优先、隐私优先的设计：
 The MVP is local-first and privacy-preserving:
 
 - 上传图片在开发阶段保留在用户本机 / Uploaded images stay on the user's local machine during development.
-- 浏览器只调用本地 FastAPI 后端 / Images are sent only from the browser to the local FastAPI backend.
+- 在线版本直接在浏览器中处理图片 / The online version processes images directly in the browser.
+- 本地开发版本也可以调用本地 FastAPI 后端 / The local development version can also call the local FastAPI backend.
 - 不调用第三方 API / No third-party APIs are called.
 - 不使用云存储 / No cloud storage is used.
 - 不永久保存上传图片 / Uploaded images are not saved permanently.
@@ -89,6 +104,20 @@ npm run dev
 
 ```text
 http://localhost:5173
+```
+
+## 部署到 GitHub Pages / Deploy to GitHub Pages
+
+本仓库包含 GitHub Actions workflow：`.github/workflows/deploy.yml`。推送到 `main` 后会自动构建 `frontend` 并发布到 GitHub Pages。
+
+This repository includes a GitHub Actions workflow at `.github/workflows/deploy.yml`. After pushing to `main`, it builds `frontend` and deploys it to GitHub Pages automatically.
+
+如果第一次部署后页面没有出现，请在 GitHub 仓库中打开：
+
+If the page does not appear after the first deployment, open the GitHub repository settings:
+
+```text
+Settings -> Pages -> Build and deployment -> Source -> GitHub Actions
 ```
 
 ## API 示例 / Example API Response
