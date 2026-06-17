@@ -108,16 +108,19 @@ http://localhost:5173
 
 ## 部署到 GitHub Pages / Deploy to GitHub Pages
 
-本仓库包含 GitHub Actions workflow：`.github/workflows/deploy.yml`。推送到 `main` 后会自动构建 `frontend` 并发布到 GitHub Pages。
+本仓库使用 `gh-pages` 分支发布静态网页。`frontend/dist` 的构建产物已经推送到 `gh-pages` 分支。
 
-This repository includes a GitHub Actions workflow at `.github/workflows/deploy.yml`. After pushing to `main`, it builds `frontend` and deploys it to GitHub Pages automatically.
+This repository publishes the static web app from the `gh-pages` branch. The built `frontend/dist` files have been pushed to `gh-pages`.
 
-如果第一次部署后页面没有出现，请在 GitHub 仓库中打开：
+第一次启用时，请在 GitHub 仓库中打开：
 
-If the page does not appear after the first deployment, open the GitHub repository settings:
+For the first setup, open the GitHub repository settings:
 
 ```text
-Settings -> Pages -> Build and deployment -> Source -> GitHub Actions
+Settings -> Pages -> Build and deployment -> Source -> Deploy from a branch
+Branch -> gh-pages
+Folder -> / (root)
+Save
 ```
 
 ## API 示例 / Example API Response
