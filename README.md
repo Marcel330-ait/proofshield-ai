@@ -37,9 +37,9 @@ ProofShield AI is an MVP web app for analyzing whether an uploaded image is susp
 
 ## 产品边界 / Product Boundary
 
-ProofShield AI 不证明图片是真实或伪造的，不判断某个人是否诈骗，也不作法律结论。本工具只提供风险信号，并建议用户通过原始文件、视频证据或可信来源进一步核验。
+ProofShield AI 不证明图片是真实或伪造的，不判断某个人是否诈骗，也不作法律结论。当前公开网页使用 MVP 启发式检测逻辑，不是真正训练过的鉴伪模型。本工具只提供风险信号，并建议用户通过原始文件、视频证据或可信来源进一步核验。
 
-ProofShield AI does not prove whether an image is real or fake. It does not say a person is scamming and does not make legal conclusions. The app only provides a risk signal and recommends independent verification.
+ProofShield AI does not prove whether an image is real or fake. It does not say a person is scamming and does not make legal conclusions. The public web version currently uses MVP heuristic logic, not a trained detection model. The app only provides a risk signal and recommends independent verification.
 
 ## 隐私模型 / Privacy Model
 

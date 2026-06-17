@@ -32,7 +32,7 @@ const copy = {
     fileSize: "文件大小",
     present: "存在",
     missing: "缺失",
-    disclaimer: "本工具仅提供 AI 生成风险信号，并不能证明图片是真实或伪造的。",
+    disclaimer: "本工具仅提供 MVP 启发式风险信号，并不能证明图片是真实或伪造的。真实准确检测需要接入经过验证的本地模型。",
     errors: {
       type: "请上传 JPG、PNG 或 WEBP 图片。",
       size: "文件过大。最大上传大小为 10MB。",
@@ -67,7 +67,7 @@ const copy = {
     fileSize: "File size",
     present: "Present",
     missing: "Missing",
-    disclaimer: "This tool provides an AI-generated risk signal only. It does not prove whether an image is real or fake.",
+    disclaimer: "This tool provides an MVP heuristic risk signal only. It does not prove whether an image is real or fake. Accurate detection requires a validated local model.",
     errors: {
       type: "Please upload a JPG, PNG, or WEBP image.",
       size: "File is too large. Maximum upload size is 10MB.",
@@ -170,22 +170,62 @@ function standardDeviation(values) {
   return Math.sqrt(mean(values.map((value) => (value - avg) ** 2)));
 }
 
-function colorUniformitySignal(pixels) {
+function visualMetrics(pixels) {
   const channels = [[], [], []];
+  const gray = [];
   for (let index = 0; index < pixels.length; index += 4) {
-    channels[0].push(pixels[index]);
-    channels[1].push(pixels[index + 1]);
-    channels[2].push(pixels[index + 2]);
+    const red = pixels[index];
+    const green = pixels[index + 1];
+    const blue = pixels[index + 2];
+    channels[0].push(red);
+    channels[1].push(green);
+    channels[2].push(blue);
+    gray.push(0.299 * red + 0.587 * green + 0.114 * blue);
   }
 
   const channelMeans = channels.map(mean);
   const channelStdev = mean(channels.map(standardDeviation));
   const channelMeanSpread = standardDeviation(channelMeans);
+  const bins = new Array(16).fill(0);
+  gray.forEach((value) => {
+    bins[Math.min(15, Math.floor(value / 16))] += 1;
+  });
+  const entropy = bins.reduce((sum, count) => {
+    if (!count) return sum;
+    const probability = count / gray.length;
+    return sum - probability * Math.log2(probability);
+  }, 0);
 
+  let edgeCount = 0;
+  let comparisons = 0;
+  for (let y = 0; y < 96; y += 1) {
+    for (let x = 0; x < 96; x += 1) {
+      const current = gray[y * 96 + x];
+      if (x < 95) {
+        comparisons += 1;
+        if (Math.abs(current - gray[y * 96 + x + 1]) > 24) edgeCount += 1;
+      }
+      if (y < 95) {
+        comparisons += 1;
+        if (Math.abs(current - gray[(y + 1) * 96 + x]) > 24) edgeCount += 1;
+      }
+    }
+  }
+
+  return {
+    channelStdev,
+    channelMeanSpread,
+    entropy,
+    edgeDensity: edgeCount / comparisons,
+  };
+}
+
+function colorUniformitySignal(metrics) {
   let signal = 0;
-  if (channelStdev < 42) signal += 10;
-  if (channelMeanSpread < 18) signal += 6;
-  if (channelStdev > 75) signal -= 7;
+  if (metrics.channelStdev < 24) signal += 8;
+  else if (metrics.channelStdev < 42) signal += 4;
+  if (metrics.channelMeanSpread < 14) signal += 3;
+  if (metrics.channelStdev > 72) signal -= 7;
   return signal;
 }
 
@@ -201,25 +241,46 @@ function compressionSignal(metadata) {
   const pixels = Math.max(1, metadata.width * metadata.height);
   const bytesPerPixel = metadata.file_size_bytes / pixels;
 
-  if (metadata.format === "PNG" && bytesPerPixel < 1.2) return 12;
-  if (metadata.format === "JPEG" && bytesPerPixel < 0.25) return 10;
+  if (metadata.format === "PNG" && bytesPerPixel < 0.8) return 6;
+  if (metadata.format === "JPEG" && bytesPerPixel < 0.06) return 6;
+  if (metadata.format === "JPEG" && bytesPerPixel < 0.14) return 3;
   if (bytesPerPixel > 5) return -4;
   return 0;
 }
 
 function detectAiGenerated(metadata, pixels) {
-  let score = 35;
-  score += metadata.has_exif ? -6 : 18;
+  const metrics = visualMetrics(pixels);
+  const isNonSquareJpeg = metadata.format === "JPEG" && metadata.width !== metadata.height;
+  const isCommonCameraShape = isNonSquareJpeg && Math.max(metadata.width, metadata.height) >= 1000;
+
+  let score = 24;
+  score += metadata.has_exif ? -8 : 6;
   score += sizeSignal(metadata);
   score += compressionSignal(metadata);
-  score += colorUniformitySignal(pixels);
-  if (metadata.format === "WEBP") score += 4;
+  score += colorUniformitySignal(metrics);
+  if (metrics.edgeDensity < 0.035) score += 8;
+  else if (metrics.edgeDensity > 0.09) score -= 8;
+  if (metrics.entropy < 3.2) score += 6;
+  else if (metrics.entropy > 4.4) score -= 6;
+  if (metadata.format === "WEBP") score += 3;
+  if (isCommonCameraShape) score -= 12;
+
+  const weakEvidenceOnly =
+    isNonSquareJpeg &&
+    !metadata.has_exif &&
+    metadata.width >= 800 &&
+    metadata.height >= 800 &&
+    metrics.entropy >= 3.3;
+  if (weakEvidenceOnly) {
+    score = Math.min(score, 54);
+  }
+
   return Math.max(0, Math.min(100, Math.round(score)));
 }
 
 function getRiskLevel(score) {
-  if (score >= 70) return "High";
-  if (score >= 35) return "Medium";
+  if (score >= 75) return "High";
+  if (score >= 45) return "Medium";
   return "Low";
 }
 
@@ -227,8 +288,8 @@ function generateReport(score, metadata) {
   const riskLevel = getRiskLevel(score);
   const conclusions = {
     High: {
-      en: "This image is highly suspected to be AI-generated and may carry fraud or misinformation risk.",
-      zh: "这张图片高度疑似由 AI 生成，并可能带来欺诈或误导信息风险。",
+      en: "This image has strong AI-generated risk signals and may carry fraud or misinformation risk.",
+      zh: "这张图片存在较强的 AI 生成风险信号，并可能带来欺诈或误导信息风险。",
     },
     Medium: {
       en: "This image has some AI-generated risk signals. Further verification is recommended.",
