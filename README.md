@@ -1,182 +1,113 @@
-# ProofShield AI
+# ProofShield AI v2
 
-本地优先的 AI 生成图片风险信号工具。
+ProofShield AI v2 is a local-first multimodal AI-generated image risk estimator. It returns a calibrated probability, risk band, confidence, and model-derived branch explanations. It never labels an image "fake" and is not a provenance, identity, or legal-verification system.
 
-Local-first AI-generated image risk signal app.
-
-作者 / Author: [Marcel330-ait](https://github.com/Marcel330-ait)
-
-## 在线使用 / Use Online
-
-打开 GitHub Pages 链接即可使用，不需要安装后端：
-
-Open the GitHub Pages link to use the app directly. No backend setup is required:
+## v2 architecture
 
 ```text
-https://marcel330-ait.github.io/proofshield-ai/
+image bytes
+  |- frozen OpenCLIP ViT-B/32 image encoder -> normalized visual embedding
+  |- FFT/noise extractor -> spectral/high-frequency feature vector
+  |- metadata summary -> weak auxiliary feature vector
+  `- learned MLP fusion -> temperature calibration -> probability
 ```
 
-公开网页版本会直接在浏览器中分析图片，不会上传图片到服务器。
+The fusion classifier is `Linear(input, 512) -> ReLU -> Dropout(0.3) -> Linear(512, 128) -> ReLU -> Linear(128, 1)`. It trains with BCE-with-logits (or optional focal loss), not a rule score. Frequency and metadata weights are jointly learned with the visual embedding; metadata is auxiliary and cannot independently decide an outcome.
 
-The public web version analyzes images directly in the browser and does not upload images to a server.
+The prior browser/backend heuristic scoring path has been removed from serving. `/analyze` only returns a score from a trained local checkpoint. Without a validated checkpoint, it returns `503` rather than inventing a score.
 
-## 项目简介 / Overview
-
-ProofShield AI 是一个 MVP Web 应用，用于分析上传图片是否疑似由 AI 生成，并提示潜在欺诈或误导信息风险。
-
-ProofShield AI is an MVP web app for analyzing whether an uploaded image is suspected to be AI-generated and whether it may carry fraud or misinformation risk.
-
-返回内容 / It returns:
-
-- AI 生成概率 / AI-generated probability from 0 to 100
-- 风险等级：低、中、高 / Risk level: Low, Medium, or High
-- 谨慎结论 / Cautious conclusion
-- 检测信号 / Detection signals
-- 安全建议 / Safety recommendations
-- 隐私友好的元数据摘要 / Privacy-preserving metadata summary
-
-## 产品边界 / Product Boundary
-
-ProofShield AI 不证明图片是真实或伪造的，不判断某个人是否诈骗，也不作法律结论。当前公开网页使用 MVP 启发式检测逻辑，不是真正训练过的鉴伪模型。本工具只提供风险信号，并建议用户通过原始文件、视频证据或可信来源进一步核验。
-
-ProofShield AI does not prove whether an image is real or fake. It does not say a person is scamming and does not make legal conclusions. The public web version currently uses MVP heuristic logic, not a trained detection model. The app only provides a risk signal and recommends independent verification.
-
-## 隐私模型 / Privacy Model
-
-MVP 采用本地优先、隐私优先的设计：
-
-The MVP is local-first and privacy-preserving:
-
-- 上传图片在开发阶段保留在用户本机 / Uploaded images stay on the user's local machine during development.
-- 在线版本直接在浏览器中处理图片 / The online version processes images directly in the browser.
-- 本地开发版本也可以调用本地 FastAPI 后端 / The local development version can also call the local FastAPI backend.
-- 不调用第三方 API / No third-party APIs are called.
-- 不使用云存储 / No cloud storage is used.
-- 不永久保存上传图片 / Uploaded images are not saved permanently.
-- 后端从内存中处理图片 / The backend processes images from memory.
-- 不记录原始图片文件或图片字节 / Raw image files and bytes are not logged.
-
-## 项目结构 / Project Structure
+## Layout
 
 ```text
-proofshield-ai/
-  backend/
-    main.py
-    detector.py
-    metadata_checker.py
-    risk_report.py
-    requirements.txt
-  frontend/
-    src/
-      App.jsx
-      main.jsx
-      styles.css
-    package.json
-    vite.config.js
-  README.md
+ml/clip_encoder.py  frozen OpenCLIP branch
+ml/frequency.py     FFT, spectral entropy, residual/noise statistics
+ml/metadata.py      private metadata summary and encoding
+ml/fusion.py        MLP, feature normalizer, temperature scaler
+ml/dataset.py       manifest dataset and corruption augmentation
+ml/train.py         reproducible training
+ml/evaluate.py      metrics, ECE, robustness report
+ml/inference.py     local model-only inference
+backend/api.py      FastAPI POST /analyze
+frontend/           existing Vite UI, now calls the local API
+checkpoints/        validated model artifact location
 ```
 
-## 运行后端 / Run Backend
+## Install
 
-```bash
-cd backend
+```powershell
+cd C:\Users\q1984\Documents\Playground\proofshield-ai
 python -m venv .venv
-.venv\Scripts\activate
+.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-uvicorn main:app --reload --host 127.0.0.1 --port 8000
 ```
 
-健康检查 / Health check:
+The pretrained OpenCLIP weights may download once when training/bootstraping the encoder, then remain cached locally. With cached weights and `checkpoints/model.pt`, inference uses no external API and sends no image to any cloud service.
 
-```bash
-curl http://localhost:8000/health
+## Dataset manifest
+
+Use [data/manifest.example.csv](data/manifest.example.csv) as a schema. Labels are `0` for real/camera imagery and `1` for AI-generated imagery. Recommended real sources are COCO, ImageNet, and licensed camera-photo collections. Recommended AI data is GenImage plus balanced Stable Diffusion, Midjourney, and DALL-E samples where licences permit. Split by source/generator/prompt family so near duplicates never cross train, validation, and test.
+
+## Train
+
+```powershell
+python -m ml.train --manifest data\manifest.csv --epochs 12 --batch-size 16 --output checkpoints\model.pt
 ```
 
-## 运行前端 / Run Frontend
+Training uses JPEG/social recompression, resize, screenshot borders, crop, blur, and sensor-like noise. The OpenCLIP encoder is frozen; only the fusion MLP, normalizer, and temperature scalar are learned. The saved checkpoint includes configuration, normalizer, calibration, validation metrics, manifest, and seed.
 
-```bash
+## Evaluate and robustness test
+
+```powershell
+python -m ml.evaluate --checkpoint checkpoints\model.pt --manifest data\manifest.csv --output reports\evaluation.json
+```
+
+The report includes Accuracy, Precision, Recall, F1, ROC-AUC, Average Precision, Expected Calibration Error, and performance drops for JPEG Q35, 50-percent resize, center crop, Gaussian blur, and screenshot-like recompression. Do not deploy without held-out-source and robustness validation.
+
+## Serve locally
+
+```powershell
+cd backend
+..\.venv\Scripts\uvicorn.exe api:app --host 127.0.0.1 --port 8000
+```
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8000/health
 cd frontend
 npm install
 npm run dev
 ```
 
-打开 / Open:
+The Vite UI sends the selected file only to `http://127.0.0.1:8000/analyze` by default. Override it through `VITE_API_BASE_URL`. GitHub Pages cannot execute the Python model, so it can only host a UI/demo unless the user also runs the local service.
 
-```text
-http://localhost:5173
-```
-
-## 部署到 GitHub Pages / Deploy to GitHub Pages
-
-本仓库使用 `gh-pages` 分支发布静态网页。`frontend/dist` 的构建产物已经推送到 `gh-pages` 分支。
-
-This repository publishes the static web app from the `gh-pages` branch. The built `frontend/dist` files have been pushed to `gh-pages`.
-
-第一次启用时，请在 GitHub 仓库中打开：
-
-For the first setup, open the GitHub repository settings:
-
-```text
-Settings -> Pages -> Build and deployment -> Source -> Deploy from a branch
-Branch -> gh-pages
-Folder -> / (root)
-Save
-```
-
-## API 示例 / Example API Response
+## API response
 
 ```json
 {
-  "ai_probability": 87,
-  "risk_level": "High",
-  "conclusion": "This image is highly suspected to be AI-generated and may carry fraud or misinformation risk.",
-  "signals": [
-    "The visual detector found stronger synthetic-image risk patterns.",
-    "The image has limited or missing metadata.",
-    "No trusted provenance information was detected."
-  ],
-  "recommendations": [
-    "Do not rely on this image alone as proof.",
-    "Ask for the original file, video evidence, or trusted third-party records.",
-    "Be cautious if the image is used for payment, identity, product, accident, contract, or dispute evidence."
-  ],
-  "localized": {
-    "zh": {
-      "risk_level": "高",
-      "conclusion": "这张图片高度疑似由 AI 生成，并可能带来欺诈或误导信息风险。"
-    },
-    "en": {
-      "risk_level": "High",
-      "conclusion": "This image is highly suspected to be AI-generated and may carry fraud or misinformation risk."
-    }
+  "ai_probability": 62.41,
+  "risk_level": "Medium",
+  "confidence": 0.2482,
+  "signals": {
+    "vision_score": 0.59,
+    "frequency_score": 0.53,
+    "metadata_score": 0.48,
+    "learned_contributions": {"vision": 0.11, "frequency": 0.03, "metadata": 0.01}
   },
-  "metadata": {
-    "has_exif": false,
-    "exif_keys": [],
-    "format": "PNG",
-    "width": 1024,
-    "height": 1024,
-    "mode": "RGB",
-    "file_size_bytes": 1200000
-  },
-  "disclaimer": "This tool provides an AI-generated risk signal only. It does not prove whether an image is real or fake.",
-  "disclaimer_localized": {
-    "zh": "本工具仅提供 AI 生成风险信号，并不能证明图片是真实或伪造的。",
-    "en": "This tool provides an AI-generated risk signal only. It does not prove whether an image is real or fake."
-  }
+  "explanation": ["..."],
+  "metadata": {"format": "JPEG", "width": 2048, "height": 1365}
 }
 ```
 
-## 替换占位检测器 / Replacing the Placeholder Detector
+Branch scores are conditional learned branch outputs with all other branches set to their standardized baseline. Contributions are probability changes from branch ablation. They explain the trained network's output; they are not independent rule detectors.
 
-当前 `backend/detector.py` 使用确定性的占位逻辑。后续可以把 `detect_ai_generated(image, metadata)` 替换为本地模型，例如：
+## Operational guardrails
 
-The current detector in `backend/detector.py` is deterministic placeholder logic. Replace `detect_ai_generated(image, metadata)` with a real local model later, such as:
-
-- CLIP/SigLIP embedding + MLP classifier
-- EfficientNet/ConvNeXt binary classifier
-- Any local synthetic-image detector
-
-默认保持本地推理。只有在用户明确启用云模式时，才应调用外部推理 API。
-
-Keep inference local by default. Cloud inference should stay disabled unless the user explicitly enables a cloud mode.
+- Treat the output as a probability estimate, never proof.
+- Non-commercial research, learning, and demonstration use only; see
+  [LICENSE-NONCOMMERCIAL.md](LICENSE-NONCOMMERCIAL.md).
+- Never use the output as legal evidence or to decide academic integrity, examination
+  or coursework cheating, discipline, hiring, credit, insurance, medical, law-
+  enforcement, or other high-impact matters.
+- Re-calibrate after material data, generator, or preprocessing shifts.
+- Version manifests and retain data-source/licence records for each training run.
+- Inspect source-level errors before release; do not rely on random-only split metrics.
+- Input images remain in memory only and are never logged or persisted by the API.

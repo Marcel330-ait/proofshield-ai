@@ -1,8 +1,10 @@
 import { AlertTriangle, FileImage, Info, Loader2, ShieldCheck, Upload, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import teichosLogo from "./assets/teichos-ai-safety-logo.png";
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 const ACCEPTED_TYPES = ["image/jpeg", "image/png", "image/webp"];
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
 
 const copy = {
   zh: {
@@ -12,9 +14,9 @@ const copy = {
     accepted: "支持 JPG、PNG、WEBP，最大 10MB。",
     clearImage: "清除图片",
     selectImage: "选择或拖入图片",
-    localAnalysis: "直接在你的浏览器中本地分析",
+    localAnalysis: "由本机 ProofShield ML 服务分析",
     analyze: "分析图片",
-    privacy: "隐私优先：图片仅在你的浏览器中本地分析，不会上传到服务器或第三方服务。",
+    privacy: "隐私优先：图片只会发送到你本机的 ProofShield 服务，不会调用第三方推理 API。",
     riskSignal: "风险信号",
     riskCaption: "风险提示，不是真假结论。",
     waiting: "等待中",
@@ -32,12 +34,13 @@ const copy = {
     fileSize: "文件大小",
     present: "存在",
     missing: "缺失",
-    disclaimer: "本工具仅提供 MVP 启发式风险信号，并不能证明图片是真实或伪造的。真实准确检测需要接入经过验证的本地模型。",
+    disclaimer: "本工具只提供经过校准的机器学习风险估计，不能证明图片真实或伪造。",
+    usageNotice: "仅限非商业的研究、学习与演示用途。不得作为法律、学术诚信、考试或作业作弊、纪律处分、招聘、信贷、保险、医疗、执法或任何其他高风险决策的依据。",
     errors: {
       type: "请上传 JPG、PNG 或 WEBP 图片。",
       size: "文件过大。最大上传大小为 10MB。",
       missing: "请先选择一张图片再运行分析。",
-      fallback: "无法在浏览器中分析这张图片。",
+      fallback: "本机 ProofShield 服务无法分析这张图片。",
     },
   },
   en: {
@@ -47,9 +50,9 @@ const copy = {
     accepted: "JPG, PNG, or WEBP. Maximum 10MB.",
     clearImage: "Clear image",
     selectImage: "Select or drop image",
-    localAnalysis: "Local analysis directly in your browser",
+    localAnalysis: "Analyzed by your local ProofShield ML service",
     analyze: "Analyze Image",
-    privacy: "Privacy-first: images are analyzed locally in your browser and are not uploaded to a server or third-party service.",
+    privacy: "Privacy-first: this UI sends the image only to your local ProofShield service. No third-party inference API is used.",
     riskSignal: "Risk Signal",
     riskCaption: "Risk guidance, not a truth verdict.",
     waiting: "Waiting",
@@ -67,12 +70,13 @@ const copy = {
     fileSize: "File size",
     present: "Present",
     missing: "Missing",
-    disclaimer: "This tool provides an MVP heuristic risk signal only. It does not prove whether an image is real or fake. Accurate detection requires a validated local model.",
+    disclaimer: "This tool provides a calibrated ML risk estimate only. It does not prove whether an image is real or fake.",
+    usageNotice: "Non-commercial research, learning, and demonstration use only. Do not use as evidence or a basis for legal, academic integrity, examination or coursework cheating, disciplinary, hiring, credit, insurance, medical, law-enforcement, or other high-impact decisions.",
     errors: {
       type: "Please upload a JPG, PNG, or WEBP image.",
       size: "File is too large. Maximum upload size is 10MB.",
       missing: "Choose an image before running analysis.",
-      fallback: "Unable to analyze this image in the browser.",
+      fallback: "Unable to analyze this image with the local ProofShield service.",
     },
   },
 };
@@ -86,315 +90,6 @@ function formatBytes(value) {
   if (value < 1024) return `${value} B`;
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
   return `${(value / (1024 * 1024)).toFixed(2)} MB`;
-}
-
-function imageFormat(file) {
-  if (file.type === "image/png") return "PNG";
-  if (file.type === "image/webp") return "WEBP";
-  return "JPEG";
-}
-
-function bufferStartsWith(bytes, offset, values) {
-  return values.every((value, index) => bytes[offset + index] === value);
-}
-
-function hasJpegExif(bytes) {
-  if (!bufferStartsWith(bytes, 0, [0xff, 0xd8])) return false;
-  let offset = 2;
-  while (offset + 4 < bytes.length) {
-    if (bytes[offset] !== 0xff) return false;
-    const marker = bytes[offset + 1];
-    const length = (bytes[offset + 2] << 8) + bytes[offset + 3];
-    if (marker === 0xe1 && bufferStartsWith(bytes, offset + 4, [0x45, 0x78, 0x69, 0x66, 0x00, 0x00])) {
-      return true;
-    }
-    offset += 2 + length;
-  }
-  return false;
-}
-
-function hasPngExif(bytes) {
-  if (!bufferStartsWith(bytes, 0, [0x89, 0x50, 0x4e, 0x47])) return false;
-  let offset = 8;
-  while (offset + 12 < bytes.length) {
-    const type = String.fromCharCode(bytes[offset + 4], bytes[offset + 5], bytes[offset + 6], bytes[offset + 7]);
-    if (type === "eXIf") return true;
-    const length = (bytes[offset] << 24) | (bytes[offset + 1] << 16) | (bytes[offset + 2] << 8) | bytes[offset + 3];
-    offset += 12 + Math.max(0, length);
-  }
-  return false;
-}
-
-function hasWebpExif(bytes) {
-  if (!bufferStartsWith(bytes, 0, [0x52, 0x49, 0x46, 0x46]) || !bufferStartsWith(bytes, 8, [0x57, 0x45, 0x42, 0x50])) {
-    return false;
-  }
-  let offset = 12;
-  while (offset + 8 < bytes.length) {
-    const type = String.fromCharCode(bytes[offset], bytes[offset + 1], bytes[offset + 2], bytes[offset + 3]);
-    const length = bytes[offset + 4] | (bytes[offset + 5] << 8) | (bytes[offset + 6] << 16) | (bytes[offset + 7] << 24);
-    if (type === "EXIF") return true;
-    offset += 8 + length + (length % 2);
-  }
-  return false;
-}
-
-function detectExif(file, buffer) {
-  const bytes = new Uint8Array(buffer);
-  if (file.type === "image/jpeg") return hasJpegExif(bytes);
-  if (file.type === "image/png") return hasPngExif(bytes);
-  if (file.type === "image/webp") return hasWebpExif(bytes);
-  return false;
-}
-
-async function readImage(file) {
-  const bitmap = await createImageBitmap(file);
-  const width = bitmap.width;
-  const height = bitmap.height;
-  const canvas = document.createElement("canvas");
-  canvas.width = 96;
-  canvas.height = 96;
-  const context = canvas.getContext("2d", { willReadFrequently: true });
-  context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
-  const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
-  bitmap.close?.();
-  return { width, height, pixels };
-}
-
-function mean(values) {
-  return values.reduce((sum, value) => sum + value, 0) / Math.max(1, values.length);
-}
-
-function standardDeviation(values) {
-  const avg = mean(values);
-  return Math.sqrt(mean(values.map((value) => (value - avg) ** 2)));
-}
-
-function visualMetrics(pixels) {
-  const channels = [[], [], []];
-  const gray = [];
-  for (let index = 0; index < pixels.length; index += 4) {
-    const red = pixels[index];
-    const green = pixels[index + 1];
-    const blue = pixels[index + 2];
-    channels[0].push(red);
-    channels[1].push(green);
-    channels[2].push(blue);
-    gray.push(0.299 * red + 0.587 * green + 0.114 * blue);
-  }
-
-  const channelMeans = channels.map(mean);
-  const channelStdev = mean(channels.map(standardDeviation));
-  const channelMeanSpread = standardDeviation(channelMeans);
-  const bins = new Array(16).fill(0);
-  gray.forEach((value) => {
-    bins[Math.min(15, Math.floor(value / 16))] += 1;
-  });
-  const entropy = bins.reduce((sum, count) => {
-    if (!count) return sum;
-    const probability = count / gray.length;
-    return sum - probability * Math.log2(probability);
-  }, 0);
-
-  let edgeCount = 0;
-  let comparisons = 0;
-  for (let y = 0; y < 96; y += 1) {
-    for (let x = 0; x < 96; x += 1) {
-      const current = gray[y * 96 + x];
-      if (x < 95) {
-        comparisons += 1;
-        if (Math.abs(current - gray[y * 96 + x + 1]) > 24) edgeCount += 1;
-      }
-      if (y < 95) {
-        comparisons += 1;
-        if (Math.abs(current - gray[(y + 1) * 96 + x]) > 24) edgeCount += 1;
-      }
-    }
-  }
-
-  return {
-    channelStdev,
-    channelMeanSpread,
-    entropy,
-    edgeDensity: edgeCount / comparisons,
-  };
-}
-
-function colorUniformitySignal(metrics) {
-  let signal = 0;
-  if (metrics.channelStdev < 24) signal += 8;
-  else if (metrics.channelStdev < 42) signal += 4;
-  if (metrics.channelMeanSpread < 14) signal += 3;
-  if (metrics.channelStdev > 72) signal -= 7;
-  return signal;
-}
-
-function sizeSignal(metadata) {
-  let signal = 0;
-  if (metadata.width === metadata.height && [512, 768, 1024, 1536, 2048].includes(metadata.width)) signal += 15;
-  if (metadata.width >= 1024 && metadata.height >= 1024) signal += 5;
-  if (Math.min(metadata.width, metadata.height) < 256) signal -= 8;
-  return signal;
-}
-
-function compressionSignal(metadata) {
-  const pixels = Math.max(1, metadata.width * metadata.height);
-  const bytesPerPixel = metadata.file_size_bytes / pixels;
-
-  if (metadata.format === "PNG" && bytesPerPixel < 0.8) return 6;
-  if (metadata.format === "JPEG" && bytesPerPixel < 0.06) return 6;
-  if (metadata.format === "JPEG" && bytesPerPixel < 0.14) return 3;
-  if (bytesPerPixel > 5) return -4;
-  return 0;
-}
-
-function detectAiGenerated(metadata, pixels) {
-  const metrics = visualMetrics(pixels);
-  const isNonSquareJpeg = metadata.format === "JPEG" && metadata.width !== metadata.height;
-  const isCommonCameraShape = isNonSquareJpeg && Math.max(metadata.width, metadata.height) >= 1000;
-  const bytesPerPixel = metadata.file_size_bytes / Math.max(1, metadata.width * metadata.height);
-  const hasCompressedLowTextureJpeg =
-    metadata.format === "JPEG" &&
-    !metadata.has_exif &&
-    bytesPerPixel < 0.16 &&
-    metrics.entropy < 3.35 &&
-    metrics.channelMeanSpread < 14;
-
-  let score = 24;
-  score += metadata.has_exif ? -8 : 6;
-  score += sizeSignal(metadata);
-  score += compressionSignal(metadata);
-  score += colorUniformitySignal(metrics);
-  if (metrics.edgeDensity < 0.035) score += 8;
-  else if (metrics.edgeDensity > 0.09) score -= 8;
-  if (metrics.entropy < 3.2) score += 6;
-  else if (metrics.entropy > 4.4) score -= 6;
-  if (hasCompressedLowTextureJpeg) score += 36;
-  if (metadata.format === "WEBP") score += 3;
-  if (isCommonCameraShape && !hasCompressedLowTextureJpeg) score -= 12;
-
-  const weakEvidenceOnly =
-    isNonSquareJpeg &&
-    !metadata.has_exif &&
-    metadata.width >= 800 &&
-    metadata.height >= 800 &&
-    metrics.entropy >= 3.3 &&
-    bytesPerPixel >= 0.16;
-  if (weakEvidenceOnly) {
-    score = Math.min(score, 54);
-  }
-
-  return Math.max(0, Math.min(100, Math.round(score)));
-}
-
-function getRiskLevel(score) {
-  if (score >= 75) return "High";
-  if (score >= 45) return "Medium";
-  return "Low";
-}
-
-function generateReport(score, metadata) {
-  const riskLevel = getRiskLevel(score);
-  const conclusions = {
-    High: {
-      en: "This image has strong AI-generated risk signals and may carry fraud or misinformation risk.",
-      zh: "这张图片存在较强的 AI 生成风险信号，并可能带来欺诈或误导信息风险。",
-    },
-    Medium: {
-      en: "This image has some AI-generated risk signals. Further verification is recommended.",
-      zh: "这张图片存在一些 AI 生成风险信号，建议进一步核验。",
-    },
-    Low: {
-      en: "This image shows a low AI-generated risk signal, but this does not prove authenticity.",
-      zh: "这张图片显示较低的 AI 生成风险信号，但这并不能证明其真实性。",
-    },
-  };
-
-  const signals = { en: [], zh: [] };
-  if (score >= 70) {
-    signals.en.push("The visual detector found stronger synthetic-image risk patterns.");
-    signals.zh.push("视觉检测器发现较强的合成图像风险模式。");
-  } else if (score >= 35) {
-    signals.en.push("The visual detector found some synthetic-image risk patterns.");
-    signals.zh.push("视觉检测器发现一些合成图像风险模式。");
-  } else {
-    signals.en.push("The visual detector found limited synthetic-image risk patterns.");
-    signals.zh.push("视觉检测器发现的合成图像风险模式较少。");
-  }
-
-  if (metadata.has_exif) {
-    signals.en.push("The image includes EXIF metadata, which may help provenance review.");
-    signals.zh.push("图片包含 EXIF 元数据，可能有助于来源核验。");
-  } else {
-    signals.en.push("The image has limited or missing metadata.");
-    signals.zh.push("图片元数据有限或缺失。");
-  }
-
-  if (metadata.width === metadata.height) {
-    signals.en.push("The image uses a square format that is common in generated-image workflows.");
-    signals.zh.push("图片为方形尺寸，这在生成式图像流程中较常见。");
-  }
-
-  signals.en.push("No trusted provenance information was detected.");
-  signals.zh.push("未检测到可信来源信息。");
-
-  const recommendations = {
-    en: [
-      "Do not rely on this image alone as proof.",
-      "Ask for the original file, video evidence, or trusted third-party records.",
-      "Be cautious if the image is used for payment, identity, product, accident, contract, or dispute evidence.",
-    ],
-    zh: [
-      "不要仅凭这张图片作为证明依据。",
-      "请索要原始文件、视频证据或可信第三方记录。",
-      "如果图片被用于付款、身份、商品、事故、合同或纠纷证据，请保持谨慎。",
-    ],
-  };
-
-  return {
-    ai_probability: score,
-    risk_level: riskLevel,
-    conclusion: conclusions[riskLevel].en,
-    signals: signals.en,
-    recommendations: recommendations.en,
-    localized: {
-      en: {
-        risk_level: riskLevel,
-        conclusion: conclusions[riskLevel].en,
-        signals: signals.en,
-        recommendations: recommendations.en,
-      },
-      zh: {
-        risk_level: { Low: "低", Medium: "中", High: "高" }[riskLevel],
-        conclusion: conclusions[riskLevel].zh,
-        signals: signals.zh,
-        recommendations: recommendations.zh,
-      },
-    },
-    disclaimer_localized: {
-      en: copy.en.disclaimer,
-      zh: copy.zh.disclaimer,
-    },
-  };
-}
-
-async function analyzeFileInBrowser(file) {
-  const buffer = await file.arrayBuffer();
-  const image = await readImage(file);
-  const metadata = {
-    has_exif: detectExif(file, buffer),
-    exif_keys: [],
-    format: imageFormat(file),
-    width: image.width,
-    height: image.height,
-    mode: "RGBA",
-    file_size_bytes: file.size,
-  };
-  const aiScore = detectAiGenerated(metadata, image.pixels);
-  return {
-    ...generateReport(aiScore, metadata),
-    metadata,
-  };
 }
 
 function App() {
@@ -431,7 +126,7 @@ function App() {
   const localizedResult = result?.localized?.[language];
   const displayRiskLevel = localizedResult?.risk_level || result?.risk_level || t.waiting;
   const displayConclusion = localizedResult?.conclusion || result?.conclusion || t.emptyConclusion;
-  const displaySignals = localizedResult?.signals || result?.signals || t.emptySignals;
+  const displaySignals = localizedResult?.signals || result?.explanation || t.emptySignals;
   const displayRecommendations = localizedResult?.recommendations || result?.recommendations || t.emptyRecommendations;
   const displayDisclaimer = result?.disclaimer_localized?.[language] || t.disclaimer;
 
@@ -465,7 +160,17 @@ function App() {
     setResult(null);
 
     try {
-      setResult(await analyzeFileInBrowser(file));
+      const formData = new FormData();
+      formData.append("file", file, file.name);
+      const response = await fetch(`${API_BASE_URL}/analyze`, {
+        method: "POST",
+        body: formData,
+      });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) {
+        throw new Error(payload.detail || `Local analysis failed (${response.status}).`);
+      }
+      setResult(payload);
     } catch (err) {
       setError(err.message || t.errors.fallback);
     } finally {
@@ -483,10 +188,15 @@ function App() {
   return (
     <main className="app-shell">
       <header className="topbar">
-        <div>
+        <div className="brand-block">
           <div className="brand-row">
-            <ShieldCheck size={28} aria-hidden="true" />
-            <h1>ProofShield AI</h1>
+            <div className="org-logo" aria-label="Teichos AI Safety">
+              <img src={teichosLogo} alt="Teichos AI Safety logo" />
+            </div>
+            <div>
+              <h1>ProofShield AI</h1>
+              <span className="org-label">A Teichos AI Safety tool</span>
+            </div>
           </div>
           <p>{t.tagline}</p>
         </div>
@@ -638,6 +348,7 @@ function App() {
           </section>
 
           <p className="disclaimer">{displayDisclaimer}</p>
+          <p className="use-notice">{t.usageNotice}</p>
         </div>
       </section>
     </main>
