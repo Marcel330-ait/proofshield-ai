@@ -28,9 +28,19 @@ app = FastAPI(
     version="2.0.0",
     description="Local multimodal AI-generated image risk estimation. Requires a validated local checkpoint.",
 )
+allowed_origins = {
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "https://marcel330-ait.github.io",
+}
+allowed_origins.update(
+    origin.strip()
+    for origin in os.environ.get("PROOFSHIELD_ALLOWED_ORIGINS", "").split(",")
+    if origin.strip()
+)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_origins=sorted(allowed_origins),
     allow_credentials=False,
     allow_methods=["GET", "POST"],
     allow_headers=["*"],
@@ -76,4 +86,3 @@ async def analyze(file: UploadFile = File(...)) -> dict:
     except ModelNotReadyError as exc:
         raise HTTPException(503, f"Model is not ready. Train or configure a validated checkpoint first. {exc}") from exc
     return await anyio.to_thread.run_sync(engine.analyze_bytes, file_bytes)
-

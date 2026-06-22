@@ -4,7 +4,8 @@ import teichosLogo from "./assets/teichos-ai-safety-logo.png";
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 const ACCEPTED_TYPES = ["image/jpeg", "image/png", "image/webp"];
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
+const API_BASE_URL =
+  window.__PROOFSHIELD_API_BASE_URL__ || import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
 
 const copy = {
   zh: {
@@ -41,6 +42,7 @@ const copy = {
       size: "文件过大。最大上传大小为 10MB。",
       missing: "请先选择一张图片再运行分析。",
       fallback: "本机 ProofShield 服务无法分析这张图片。",
+      serviceUnavailable: "模型服务尚未连接。请稍后重试，或在本机启动 ProofShield API。",
     },
   },
   en: {
@@ -77,6 +79,7 @@ const copy = {
       size: "File is too large. Maximum upload size is 10MB.",
       missing: "Choose an image before running analysis.",
       fallback: "Unable to analyze this image with the local ProofShield service.",
+      serviceUnavailable: "The model service is not connected yet. Try again later or start the local ProofShield API.",
     },
   },
 };
@@ -159,6 +162,14 @@ function App() {
     setError("");
     setResult(null);
 
+    const isPublicPageWithoutApi =
+      window.location.hostname.endsWith("github.io") && /127\.0\.0\.1|localhost/.test(API_BASE_URL);
+    if (isPublicPageWithoutApi) {
+      setError(t.errors.serviceUnavailable);
+      setLoading(false);
+      return;
+    }
+
     try {
       const formData = new FormData();
       formData.append("file", file, file.name);
@@ -172,7 +183,7 @@ function App() {
       }
       setResult(payload);
     } catch (err) {
-      setError(err.message || t.errors.fallback);
+      setError(err instanceof TypeError ? t.errors.serviceUnavailable : err.message || t.errors.fallback);
     } finally {
       setLoading(false);
     }

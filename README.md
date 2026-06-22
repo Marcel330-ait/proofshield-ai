@@ -79,6 +79,10 @@ npm run dev
 
 The Vite UI sends the selected file only to `http://127.0.0.1:8000/analyze` by default. Override it through `VITE_API_BASE_URL`. GitHub Pages cannot execute the Python model, so it can only host a UI/demo unless the user also runs the local service.
 
+For public hosting, use the included [Dockerfile](Dockerfile) and
+[deployment guide](deploy/README.md). The public Pages build reads
+`runtime-config.js`, so its API URL can be updated without rebuilding the frontend.
+
 ## API response
 
 ```json
