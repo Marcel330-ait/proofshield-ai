@@ -4,8 +4,6 @@ import teichosLogo from "./assets/teichos-ai-safety-logo.png";
 
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 const ACCEPTED_TYPES = ["image/jpeg", "image/png", "image/webp"];
-const API_BASE_URL =
-  window.__PROOFSHIELD_API_BASE_URL__ || import.meta.env.VITE_API_BASE_URL || "http://127.0.0.1:8000";
 
 const copy = {
   zh: {
@@ -15,9 +13,9 @@ const copy = {
     accepted: "支持 JPG、PNG、WEBP，最大 10MB。",
     clearImage: "清除图片",
     selectImage: "选择或拖入图片",
-    localAnalysis: "由本机 ProofShield ML 服务分析",
+    localAnalysis: "浏览器本地演示分析，不上传图片",
     analyze: "分析图片",
-    privacy: "隐私优先：图片只会发送到你本机的 ProofShield 服务，不会调用第三方推理 API。",
+    privacy: "隐私优先：图片只在当前浏览器分析，不会上传到服务器或第三方服务。",
     riskSignal: "风险信号",
     riskCaption: "风险提示，不是真假结论。",
     waiting: "等待中",
@@ -35,14 +33,13 @@ const copy = {
     fileSize: "文件大小",
     present: "存在",
     missing: "缺失",
-    disclaimer: "本工具只提供经过校准的机器学习风险估计，不能证明图片真实或伪造。",
+    disclaimer: "当前公开版使用浏览器端启发式演示分析，只提供风险提示，不能证明图片真实或伪造。",
     usageNotice: "仅限非商业的研究、学习与演示用途。不得作为法律、学术诚信、考试或作业作弊、纪律处分、招聘、信贷、保险、医疗、执法或任何其他高风险决策的依据。",
     errors: {
       type: "请上传 JPG、PNG 或 WEBP 图片。",
       size: "文件过大。最大上传大小为 10MB。",
       missing: "请先选择一张图片再运行分析。",
-      fallback: "本机 ProofShield 服务无法分析这张图片。",
-      serviceUnavailable: "模型服务尚未连接。请稍后重试，或在本机启动 ProofShield API。",
+      fallback: "无法在浏览器中分析这张图片。",
     },
   },
   en: {
@@ -52,9 +49,9 @@ const copy = {
     accepted: "JPG, PNG, or WEBP. Maximum 10MB.",
     clearImage: "Clear image",
     selectImage: "Select or drop image",
-    localAnalysis: "Analyzed by your local ProofShield ML service",
+    localAnalysis: "Browser-local demo analysis. No upload.",
     analyze: "Analyze Image",
-    privacy: "Privacy-first: this UI sends the image only to your local ProofShield service. No third-party inference API is used.",
+    privacy: "Privacy-first: images are analyzed only in this browser and are never uploaded to a server or third party.",
     riskSignal: "Risk Signal",
     riskCaption: "Risk guidance, not a truth verdict.",
     waiting: "Waiting",
@@ -72,14 +69,13 @@ const copy = {
     fileSize: "File size",
     present: "Present",
     missing: "Missing",
-    disclaimer: "This tool provides a calibrated ML risk estimate only. It does not prove whether an image is real or fake.",
+    disclaimer: "The public edition uses a browser-side heuristic demo. It provides a risk signal only and does not prove whether an image is real or fake.",
     usageNotice: "Non-commercial research, learning, and demonstration use only. Do not use as evidence or a basis for legal, academic integrity, examination or coursework cheating, disciplinary, hiring, credit, insurance, medical, law-enforcement, or other high-impact decisions.",
     errors: {
       type: "Please upload a JPG, PNG, or WEBP image.",
       size: "File is too large. Maximum upload size is 10MB.",
       missing: "Choose an image before running analysis.",
-      fallback: "Unable to analyze this image with the local ProofShield service.",
-      serviceUnavailable: "The model service is not connected yet. Try again later or start the local ProofShield API.",
+      fallback: "Unable to analyze this image in the browser.",
     },
   },
 };
@@ -93,6 +89,113 @@ function formatBytes(value) {
   if (value < 1024) return `${value} B`;
   if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
   return `${(value / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+function imageFormat(file) {
+  if (file.type === "image/png") return "PNG";
+  if (file.type === "image/webp") return "WEBP";
+  return "JPEG";
+}
+
+function hasJpegExif(bytes) {
+  if (bytes[0] !== 0xff || bytes[1] !== 0xd8) return false;
+  for (let offset = 2; offset + 9 < bytes.length; ) {
+    if (bytes[offset] !== 0xff) return false;
+    const marker = bytes[offset + 1];
+    const length = (bytes[offset + 2] << 8) + bytes[offset + 3];
+    if (marker === 0xe1 && bytes[offset + 4] === 0x45 && bytes[offset + 5] === 0x78) return true;
+    if (length < 2) return false;
+    offset += 2 + length;
+  }
+  return false;
+}
+
+async function readImageMetrics(file) {
+  const bitmap = await createImageBitmap(file);
+  const width = bitmap.width;
+  const height = bitmap.height;
+  const canvas = document.createElement("canvas");
+  canvas.width = 128;
+  canvas.height = 128;
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close?.();
+  const pixels = context.getImageData(0, 0, canvas.width, canvas.height).data;
+  const histogram = new Array(16).fill(0);
+  let edgeCount = 0;
+  let comparisons = 0;
+  const gray = new Float32Array(128 * 128);
+  for (let index = 0, pixel = 0; index < pixels.length; index += 4, pixel += 1) {
+    const value = 0.299 * pixels[index] + 0.587 * pixels[index + 1] + 0.114 * pixels[index + 2];
+    gray[pixel] = value;
+    histogram[Math.min(15, Math.floor(value / 16))] += 1;
+  }
+  for (let y = 0; y < 128; y += 1) {
+    for (let x = 0; x < 128; x += 1) {
+      const current = gray[y * 128 + x];
+      if (x < 127) {
+        comparisons += 1;
+        if (Math.abs(current - gray[y * 128 + x + 1]) > 25) edgeCount += 1;
+      }
+      if (y < 127) {
+        comparisons += 1;
+        if (Math.abs(current - gray[(y + 1) * 128 + x]) > 25) edgeCount += 1;
+      }
+    }
+  }
+  const entropy = histogram.reduce((sum, count) => {
+    if (!count) return sum;
+    const probability = count / gray.length;
+    return sum - probability * Math.log2(probability);
+  }, 0);
+  return { width, height, entropy, edgeDensity: edgeCount / Math.max(1, comparisons) };
+}
+
+function browserRiskLevel(score) {
+  if (score < 40) return "Low";
+  if (score < 70) return "Medium";
+  return "High";
+}
+
+async function analyzeFileInBrowser(file) {
+  const [buffer, image] = await Promise.all([file.arrayBuffer(), readImageMetrics(file)]);
+  const bytes = new Uint8Array(buffer);
+  const metadata = {
+    has_exif: file.type === "image/jpeg" && hasJpegExif(bytes),
+    format: imageFormat(file),
+    width: image.width,
+    height: image.height,
+    file_size_bytes: file.size,
+  };
+  const bytesPerPixel = file.size / Math.max(1, image.width * image.height);
+  let score = 30;
+  if (!metadata.has_exif) score += 7;
+  if (image.edgeDensity < 0.04) score += 12;
+  if (image.entropy < 3.15) score += 10;
+  if (metadata.format === "PNG" && bytesPerPixel < 0.9) score += 5;
+  if (image.edgeDensity > 0.12) score -= 6;
+  score = Math.max(0, Math.min(100, Math.round(score)));
+  const level = browserRiskLevel(score);
+  const explanation = [
+    "Browser demo: this estimate uses local image texture, compression, and metadata signals.",
+    "No image was uploaded, and this result is not a trained-model verdict.",
+  ];
+  const explanationZh = [
+    "浏览器演示版：此估计使用本地图片纹理、压缩与元数据风险信号。",
+    "图片未被上传；结果不是经过训练模型的判定。",
+  ];
+  return {
+    ai_probability: score,
+    risk_level: level,
+    confidence: 0.2,
+    explanation,
+    recommendations: ["Use original files and trusted provenance records for important decisions."],
+    metadata,
+    localized: {
+      en: { risk_level: level, conclusion: "Browser-local demo risk signal. Verify important claims independently.", signals: explanation, recommendations: ["Use original files and trusted provenance records for important decisions."] },
+      zh: { risk_level: { Low: "低", Medium: "中", High: "高" }[level], conclusion: "浏览器本地演示风险提示；重要事项请独立核验。", signals: explanationZh, recommendations: ["请结合原始文件与可信来源独立核验。"] },
+    },
+  };
 }
 
 function App() {
@@ -162,28 +265,10 @@ function App() {
     setError("");
     setResult(null);
 
-    const isPublicPageWithoutApi =
-      window.location.hostname.endsWith("github.io") && /127\.0\.0\.1|localhost/.test(API_BASE_URL);
-    if (isPublicPageWithoutApi) {
-      setError(t.errors.serviceUnavailable);
-      setLoading(false);
-      return;
-    }
-
     try {
-      const formData = new FormData();
-      formData.append("file", file, file.name);
-      const response = await fetch(`${API_BASE_URL}/analyze`, {
-        method: "POST",
-        body: formData,
-      });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        throw new Error(payload.detail || `Local analysis failed (${response.status}).`);
-      }
-      setResult(payload);
+      setResult(await analyzeFileInBrowser(file));
     } catch (err) {
-      setError(err instanceof TypeError ? t.errors.serviceUnavailable : err.message || t.errors.fallback);
+      setError(err.message || t.errors.fallback);
     } finally {
       setLoading(false);
     }

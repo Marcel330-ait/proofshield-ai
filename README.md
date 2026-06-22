@@ -28,7 +28,7 @@ ml/train.py         reproducible training
 ml/evaluate.py      metrics, ECE, robustness report
 ml/inference.py     local model-only inference
 backend/api.py      FastAPI POST /analyze
-frontend/           existing Vite UI, now calls the local API
+frontend/           browser-local public demo UI
 checkpoints/        validated model artifact location
 ```
 
@@ -77,11 +77,10 @@ npm install
 npm run dev
 ```
 
-The Vite UI sends the selected file only to `http://127.0.0.1:8000/analyze` by default. Override it through `VITE_API_BASE_URL`. GitHub Pages cannot execute the Python model, so it can only host a UI/demo unless the user also runs the local service.
+The local development API is available at `http://127.0.0.1:8000/analyze` when a validated checkpoint is present. GitHub Pages cannot execute the Python model. Its public edition therefore runs a browser-local demo risk signal, does not upload images, and is explicitly not a trained-model result.
 
-For public hosting, use the included [Dockerfile](Dockerfile) and
-[deployment guide](deploy/README.md). The public Pages build reads
-`runtime-config.js`, so its API URL can be updated without rebuilding the frontend.
+For the research API, use the included [Dockerfile](Dockerfile) and
+[deployment guide](deploy/README.md) when you have a validated checkpoint.
 
 ## API response
 
